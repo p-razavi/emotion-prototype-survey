@@ -1,0 +1,1656 @@
+---
+title: "Survey on people's feelings, thoughts, and behavior during an emotional episode"
+date: "last knitted: `r Sys.time()`"
+output: 
+  html_document:
+    theme: cosmo
+    highlight: textmate
+editor_options: 
+  chunk_output_type: console
+---
+
+**Notes** <br>
+
+_Data:_ Prior to running this script, the datafile ("Data_Study2and3.sav") should be downloaded from [OSF](https://osf.io/vqn28?view_only=69c35a03c254409fabe213737077c9c6) and saved in the working directory. <br>
+
+_Report:_ Some brief information about this study (e.g., design, research questions, etc.) are provided in the readme file of this repository. For more details, you can refer to the preprint of the manuscript [Study 2](https://psyarxiv.com/8ev23/) which has been published in [JPSP](https://psycnet.apa.org/record/2022-64370-001).
+
+
+```{r setup, include=FALSE}
+
+library(dplyr)
+library(foreign)
+library(ggplot2)
+library(hrbrthemes)
+library(RVAideMemoire)
+library(lmerTest)
+library(viridis)
+library(lavaan)
+library(parameters)
+
+
+df <- read.spss("Data_Study2and3.sav", use.value.labels = FALSE, to.data.frame = TRUE)
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+# functions
+
+To calculate Cohen's d(z) for within-subjects
+```{r}
+compare <- function(x,y){
+
+          r <- cor(x,y,use = "pairwise.complete.obs")
+          
+          (mean(x,na.rm = TRUE)-mean(y,na.rm = TRUE))/( 
+            sqrt(
+              (sd(x,na.rm = TRUE))^2 + (sd(y,na.rm = TRUE))^2 -
+                2*abs(r)*sd(x,na.rm = TRUE)*sd(y,na.rm = TRUE)
+            ))
+        }
+
+```
+
+To calculate percentage for each category of a Factor variable
+
+Note: When calculating the percentage, the default is to include NAs in the denominator, which gives the percentage of the TOTAL sample for each category. To avoid this, set includeNA to FALSE.
+
+```{r percentage}
+
+percentage <- function(var, includeNA = TRUE) {
+      tabb <- table(var) %>% as.data.frame()
+    
+          if (includeNA == TRUE) {
+               tabb$percentage <- (tabb$Freq * 100 / length(var))
+          } else {
+                tabb$percentage <- (tabb$Freq * 100 / sum(tabb$Freq))
+          }
+      
+      colnames(tabb)[1] <- c("category")
+      print(tabb)
+}
+```
+
+# Data preparation
+
+Assigning labels to response options
+
+```{r}
+
+df$gender <- factor(df$gender,levels = c(1,2),
+                    labels = c("female", "male"))
+
+df$MaritalStatus <- factor(df$MaritalStatus,levels = c(1,2,3,4),
+                    labels = c("single", "married", "divorced", "widower"))
+
+
+df$PartnerEVER <- factor(df$PartnerEVER,levels = c(1,2),
+                    labels = c("yes", "no"))
+
+
+df$PartnerNow <- factor(df$PartnerNow,levels = c(1,2),
+                    labels = c("yes", "no"))
+
+
+df$When <- factor(df$When,levels = c(1,2,3,4),
+                    labels = c("a few days ago", "a few weeks ago", "a few months ago", "a few years ago"))
+
+df$LastedHowLong <- factor(df$LastedHowLong,levels = c(1,2,3,4),
+                    labels = c("few minutes", "around an hour", "a few hours", "a day or more"))
+
+df$Target <- factor(df$Target,levels = c(1,2,3,4,5,6,7,8,9,10,11,12,13),
+                    labels = c("romantic partner", "mother", "sister", "brother", "father", "close friend",
+                               "acquintance", "stranger", "country/ethnicity/tribe", "religion",
+                               "sports team", "other", "relatives"))
+
+
+```
+
+
+# Demographics and narrative characteristics
+
+```{r warning=FALSE}
+#Participants' gender
+  percentage(df$gender)
+
+#Participants' marital status
+  percentage(df$MaritalStatus)
+
+#Have you ever had a romantic partner?
+  percentage(df$PartnerEVER)
+
+#Do you currently have a romantic partner?  
+  percentage(df$PartnerNow)
+
+#When did the gheirat episode happen?  
+  percentage(df$When)
+  
+#How long did the feeling last?  
+  percentage(df$LastedHowLong)
+
+#Who was the target of gheirat?  
+  percentage(df$Target)
+
+#gender difference in timing
+  chisq.test(df$gender, df$When)
+
+#gender difference in length of experience
+  chisq.test(df$gender, df$LastedHowLong)
+
+#gender difference in targets
+  chisq.test(df$gender, df$Target)
+
+```
+
+
+# Figure OS1: Gheirat frequency 
+
+Frequency of targets for which participants experienced gheirat.
+
+```{r}
+df$target_reordered <- reorder(df$Target, df$Target, FUN=length) 
+
+filter(df, !is.na(target_reordered)) %>% 
+      ggplot(aes(target_reordered)) +
+        geom_bar( fill = "coral4") + 
+  theme_ipsum() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+# Pre-registered analyses
+
+## Pre-registered H1
+1. With regards to the emotions that follow an experience of gheirat, we predict that the intensity of gheirat will have a positive relationship with these emotions ("angry, hostile, loathing (hateful), irritable, anxious, and disgusted") and a negative relationship with these emotions ("relaxed, happy, shy, lively, enthusiastic").
+
+```{r}
+##creating a df with emotions and gheirat intensity items
+#first, to create a list of items
+    item_list <- paste0("Q4_", 1:25)
+
+#now a df with relevant variables
+    h1_df <- df[,c("ParticipantNo","gender",item_list, "Intensity_c")] 
+    
+    colnames(h1_df) <- c("ParticipantNo","gender","embarrased","surprised","relaxed","disgusted_with_self","sad","afraid","happy","lonely","shy","guilty","proud","lively","angry_at_self","enthusiastic","disgusted","alert","daring","strong","angry","irritable","upset","anxious","excited","hostile","loathing","gheirat_intensity")
+
+    
+#calculating correlation coefficients and p-values
+cor_coef <- (h1_df[,colnames(h1_df)[-c(1,2)]] %>% 
+  cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+  round(2)    )[,26]
+
+p_values <- ((h1_df[,colnames(h1_df)[-c(1,2)]] %>%
+  as.matrix() %>% 
+  Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+  round(3))[,26]
+
+h1_cor_matrix <- cbind(cor_coef, p_values)
+
+#correlation between gheirat intensity and different emotions
+  h1_cor_matrix
+```
+
+
+## Pre-registered H2
+2. Men (compared to women) will report a higher intensity of gheirat.
+
+```{r}
+#t-test
+model_p2 <- t.test(h1_df$gheirat_intensity ~ h1_df$gender)
+model_p2
+
+#effect size
+lsr::cohensD(h1_df$gheirat_intensity ~ h1_df$gender)
+
+#descriptives
+psych::describeBy(h1_df$gheirat_intensity, group = h1_df$gender)
+```
+
+
+## Pre-registered H3
+3. Men (compared to women) will report a higher frequency of experiencing gheirat.
+
+```{r}
+#preparing the dataframe
+h3_df <- df[,c("ParticipantNo","gender","Q37_1","Q37_2","Q37_3","Q37_4","Q37_5","Q37_6","Q37_7","Q37_8","Q37_9","Q37_10","Q37_11")]
+
+colnames(h3_df) <- c("ParticipantNo","gender","Romantic partner","mother","sister","brother","father","close friend","an acquintance","strangers","stportsteam","religion-beliefs","country")
+
+h3_df$gheirat_freq_mean <- rowMeans(h3_df[,-c(1,2)], na.rm = TRUE)
+
+#internal consistency for gheirat towards different targets
+ltm::cronbach.alpha(h3_df[,-c(1,2)], na.rm = TRUE)
+
+#t-test
+model_p3 <- t.test(h3_df$gheirat_freq_mean ~ h3_df$gender)
+model_p3
+
+#effect size
+lsr::cohensD(h3_df$gheirat_freq_mean ~ h3_df$gender)
+
+#descriptives
+psych::describeBy(h3_df$gheirat_freq_mean, group = h3_df$gender)
+
+```
+
+
+## Pre-registered H4
+4. Participants are more likely to report the following physiological symptoms: "Change in breathing, feeling hot, cheeks burning, heart beating faster, muscles tensing, trembling;" and less likely to report the following physiological symptoms: "Feeling warm pleasant, muscles relaxing, restful."
+
+Paired-samples t-test between the two below:   
+
+1) From the list of responses that we predicted as more likely to be associated with gheirat (i.e., 'change in breathing, feeling hot, cheeks burning, heart beating faster, muscles tensing, trembling' to be higher than the percentage of experience of
+'feeling warm-pleasant, muscles relaxing, restful'), the proportion of physiological responses that the participant reported as experienced to the total of 6 predicted responses. For example, if a participant reported experiencing 'change in breathing, feeling hot, cheeks burning', their score will be 3/6 = 0.5.   
+
+2) From the list of responses that we predicted as less likely to be associated with gheirat (i.e., 'feeling warm-pleasant, muscles relaxing, restful'), the proportion of physiological responses that the participant reported as experienced to the total of the 3 predicted responses. For example, if a participant reported experiencing 'muscle relaxing', their score will be 1/3 = 0.33.
+
+```{r}
+#calculating composite (hypothesized) gheirat-related response
+#the 4 high arousal symptoms: "Change in breathing, feeling hot, cheeks burning, heart beating faster, muscles tensing, trembling;"
+  high_arousal <- c("Q10_2","Q10_6","Q10_7","Q10_8")
+
+#the 2 low arousal symptoms: "Feeling warm pleasant, muscles relaxing, restful."
+  low_arousal <- c("Q10_5","Q10_9")
+
+#relevant variables in one df  
+  h4_df <- df[,c("ParticipantNo","gender", "Q10_2","Q10_6","Q10_7",
+                 "Q10_8","Q10_5","Q10_9")]
+
+#recoding the physio variables to get those that were experienced = 1
+#If they responded "yes," it's coded as 1. Otherwise will be coded as 0.
+  h4_df$Q10_2_count <- ifelse(h4_df$Q10_2 == 1, 1, 0)
+  h4_df$Q10_6_count <- ifelse(h4_df$Q10_6 == 1, 1, 0)
+  h4_df$Q10_7_count <- ifelse(h4_df$Q10_7 == 1, 1, 0)
+  h4_df$Q10_8_count <- ifelse(h4_df$Q10_8 == 1, 1, 0)
+  h4_df$Q10_5_count <- ifelse(h4_df$Q10_5 == 1, 1, 0)
+  h4_df$Q10_9_count <- ifelse(h4_df$Q10_9 == 1, 1, 0)
+
+#summing the counts for each category
+  high_arousal_count <- c("Q10_2_count","Q10_6_count","Q10_7_count","Q10_8_count")
+  low_arousal_count <- c("Q10_5_count","Q10_9_count")
+
+#creating proportion scores based on pre-registration
+  h4_df$high_arousal_score <- (rowSums(h4_df[,high_arousal_count])) / 4
+  h4_df$low_arousal_score <- (rowSums(h4_df[,low_arousal_count])) / 2  
+
+#t-test 
+  t.test(h4_df$high_arousal_score, h4_df$low_arousal_score, paired = TRUE)
+
+#effect size  
+  compare(h4_df$high_arousal_score, h4_df$low_arousal_score)
+
+#descriptives  
+  psych::describe(h4_df$high_arousal_score)
+  psych::describe(h4_df$low_arousal_score)
+
+```
+
+
+## Pre-registered H5
+5. Based on the self-report of the expressive reactions, for each participant, we will calculate the following two scores; using a dependent samples t-test we will compare the mean of the two scores: 
+
+A) From the list of responses that we predicted as more likely to be associated with gheirat (i.e., 'screaming, yelling, moving against people or things _[withdrawing from others]_, aggression'), the proportion of expressive reactions that the participant reported as experienced to the total of 4 predicted reactions. For example, if a participant reported experiencing 'screaming, yelling', their score will be 2/4 = 0.5. 
+B) From the list of responses that we predicted as less likely to be associated with gheirat (i.e., 'laughing, smiling'), the proportion of expressive reactions that the participant reported as experienced to the total of the 2 predicted reactions. For example, if a participant reported experiencing 'smiling', their score will be 1/2 = 0.50
+
+```{r}
+#calculating composite (hypothesized) gheirat-related response
+#the 3 negative-aggressive responses: "Screaming, yelling, moving against people or things, aggression,"
+  neg_aggressive <- c("Q11_4","Q11_10","Q11_9")
+
+#the positive non-aggressive response: "laughing, smiling"
+  pos_non_aggressive <- c("Q11_1")
+
+#relevant variables in one df    
+  h5_df <- df[,c("ParticipantNo","gender", "Q11_4","Q11_10","Q11_9","Q11_1")]
+
+#recoding the physio variables to get those that were experienced = 1
+  h5_df$Q11_4_count <- ifelse(h5_df$Q11_4 == 1, 1, 0)
+  h5_df$Q11_10_count <- ifelse(h5_df$Q11_10 == 1, 1, 0)
+  h5_df$Q11_9_count <- ifelse(h5_df$Q11_9 == 1, 1, 0)
+  h5_df$Q11_1_count <- ifelse(h5_df$Q11_1 == 1, 1, 0)
+
+#summing the counts for each category
+  neg_aggressive_count <- c("Q11_4_count","Q11_10_count","Q11_9_count")
+  pos_non_aggressive_count <- c("Q11_1_count")
+
+#creating proportion scores based on pre-registration
+  h5_df$neg_aggressive_score <- (rowSums(h5_df[,neg_aggressive_count])) / 3
+  h5_df$pos_non_aggressive_score <- h5_df$Q11_1_count
+
+#descriptives
+  psych::describe(h5_df$neg_aggressive_score)
+  psych::describe(h5_df$pos_non_aggressive_score)
+
+#t-test
+  t.test(h5_df$neg_aggressive_score, h5_df$pos_non_aggressive_score, paired = TRUE)
+
+#effect size  
+  compare(h5_df$neg_aggressive_score, h5_df$pos_non_aggressive_score)
+
+```
+
+
+## Pre-registered H6
+
+6. The participants are more likely to appraise the event triggering gheirat as "unpleasant" (compared to pleasant or neutral), "unfair" (compared to fair or neutral), and "improper or immoral" (compared to proper/moral or neutral).
+
+_Note: We originally planned to use the following response options for the unfairness item (fair, neutral, unfair) and the impropriety item (improper, neutral, proper). However, the options were mistakenly entered in Qualtrics as 1= "not at all" to 3 = "very much." We deviate from the original plan and code the response options for this item in a way that allows us to test the pre-registered hypotheses that gheirat eliciting event is generally perceived as "unfair" and "improper/immoral."_  
+
+```{r}
+#df with the relevant variables
+  h6_df <- df[,c("ParticipantNo","gender", "Pleasant","unfair","JudgedImproper")]
+
+#Pleasantness
+  h6_df$Pleasant <- ifelse(h6_df$Pleasant == 1, "pleasant",
+                          ifelse(h6_df$Pleasant == 2, "neutral",
+                                 ifelse(h6_df$Pleasant == 3, "unpleasant", NA)))
+  #Chi-squared goodness of fit
+    percentage(h6_df$Pleasant, FALSE)
+    
+    pleasant_prop <- c(45, 17, 278)
+  
+    model_p6_a <- chisq.test(pleasant_prop, p = c(1/3, 1/3, 1/3))
+    model_p6_a
+
+#Fairness
+  h6_df$unfair <- ifelse(h6_df$unfair == 1, "fair",
+                          ifelse(h6_df$unfair == 2, "unfair",
+                                 ifelse(h6_df$unfair == 3, "unfair", NA)))
+
+  #Chi-squared goodness of fit
+    percentage(h6_df$unfair, FALSE)
+    
+    unfair_prop <- c(52, 256)
+  
+    model_p6_b <- chisq.test(unfair_prop, p = c(1/2, 1/2))
+    model_p6_b
+
+#Improper/immoral
+  h6_df$JudgedImproper <- ifelse(h6_df$JudgedImproper == 1, "moral",
+                          ifelse(h6_df$JudgedImproper == 2, "immoral",
+                                 ifelse(h6_df$JudgedImproper == 3, "immoral", NA)))
+
+  #Chi-squared goodness of fit
+    percentage(h6_df$JudgedImproper, FALSE)
+    
+    immoral_prop <- c(204, 109)
+  
+    model_p6_c <- chisq.test(immoral_prop, p = c(1/2, 1/2))
+    model_p6_c
+
+```
+
+## Pre-registered H7
+
+7. With regards to the experience of Gheirat, we predict a negative relationship between the intensity of gheirat and the following positive experiences: "I felt something good is about to happen", "I felt I was respected", and "I felt liked."
+
+```{r}
+#df with relevant variables
+    h7_df <- df[,c("ParticipantNo","gender","Q24_14","Q24_19","Q24_18", "Intensity_c")] 
+    
+    colnames(h7_df) <- c("ParticipantNo","gender","felt_good_happens", "felt_respected","felt_liked","gheirat_intensity")
+
+    
+#calculating correlations and p-values
+  cor_coef2 <- (h7_df[,colnames(h7_df)[-c(1,2)]] %>% 
+    cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+    round(2)    )[,4]
+  
+  p_values2 <- ((h7_df[,colnames(h7_df)[-c(1,2)]] %>%
+    as.matrix() %>% 
+    Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+    round(3))[,4]
+  
+  h7_cor_matrix <- cbind(cor_coef2, p_values2)
+
+#correlation table  
+  h7_cor_matrix
+
+```
+
+
+## Pre-registered H8
+
+### Perception of harm/insult
+1) Regression analyses with the "gheirat type-harm" item as the predictor and "Someone being victimized", "feeling determined", "someone has been rude", "I felt responsible for someone", and "I felt protective towards someone" as the outcomes. 
+("Q24_8","Q24_16","Q24_12","Q24_7","Q24_9")
+
+```{r}
+#df with the relevant variables
+    h8_df <- df[,c("ParticipantNo","gender","Harm_c","BoundVio_c","Loss_c","Q24_8","Q24_16","Q24_12","Q24_7","Q24_9","Q24_10","Q24_11","Q24_1","Q24_6","Q24_3","Q24_5", "Intensity_c")] 
+
+    colnames(h8_df) <- c("ParticipantNo","gender","harm", "boundary_vio","loss","someone_victimized","felt_determined","someone_rude","felt_responsible","protective","possessive","boundary_cross","felt_insecure","losing_valuable","felt_rejected","felt_betrayed","gheirat_intensity")
+
+
+#intercorrelation bet. 3 subjective types
+  h8_df[,colnames(h8_df)[c(3:5)]] %>%
+  as.matrix() %>% 
+  Hmisc::rcorr(type = "pearson")
+
+#the model with "concern about harm" as the predictor 
+
+harm_model <- "
+          someone_victimized ~ harm
+          felt_determined ~ harm
+          someone_rude ~ harm
+          felt_responsible ~ harm
+          protective ~ harm
+        "
+
+  fit1 <- sem(harm_model, data = h8_df, se = "bootstrap", bootstrap = 2000)
+
+#model output  
+  summary(fit1, rsquare=TRUE, ci = TRUE)
+  standardizedSolution(fit1, type="std.all")
+
+
+
+```
+
+Pre-registered H8.2
+
+### Boundary violation by 3rd person
+
+2) Regression analyses with the "gheirat type-sacred boundary violation" item as the predictor and "I felt possessive", "boundary has been crossed", "someone has been rude", and "I felt protective." as the outcomes. ("Q24_10","Q24_11","Q24_12","Q24_9")
+
+```{r}
+
+boundary_vio_model <- "
+          possessive ~ boundary_vio
+          boundary_cross ~ boundary_vio
+          someone_rude ~ boundary_vio
+          protective ~ boundary_vio
+          
+        "
+
+fit2 <- sem(boundary_vio_model, data = h8_df, se = "bootstrap", bootstrap = 2000)
+
+
+#model output
+  summary(fit2, rsquare=TRUE, ci = TRUE)
+  standardizedSolution(fit2, type="std.all")
+
+```
+
+Pre-registered H8.3
+
+### Concern about losing namoos
+
+3) Regression analyses with the "gheirat type-loss" item as the predictor and "felt insecure", "losing something valuable", "felt rejected", and "betrayed." as the outcomes. ("Q24_1","Q24_6","Q24_3","Q24_5")
+
+```{r}
+loss_model <- "
+          felt_insecure ~ loss
+          losing_valuable ~ loss
+          felt_rejected ~ loss
+          felt_betrayed ~ loss
+        "
+
+fit3 <- sem(loss_model, data = h8_df, se = "bootstrap", bootstrap = 2000)
+
+#model output
+  summary(fit3, rsquare=TRUE, ci = TRUE)
+  standardizedSolution(fit3, type="std.all")
+
+```
+
+
+## Pre-registered H9
+
+1) "Gheirat type-harm": Among the correlations between this items and the affective experience items, the strongest correlations will be with feelings of "anger, hostility, daring, alert, strong."
+
+```{r}
+##creating a df with emotions and "Gheirat Type" items
+  #create a list of items
+    item_list <- paste0("Q4_", 1:25)
+
+#a df with relevant variables
+    h9_df <- df[,c("ParticipantNo","gender",item_list, "Harm_c","BoundVio_c","Loss_c")] 
+    
+    colnames(h9_df) <- c("ParticipantNo","gender","embarrased","surprised","relaxed","disgusted_with_self","sad","afraid","happy","lonely","shy","guilty","proud","lively","angry_at_self","enthusiastic","disgusted","alert","daring","strong","angry","irritable","upset","anxious","excited","hostile","loathing","harm", "boundary_vio","loss")
+
+    
+#correlation analyses
+cor_coef3 <- (h9_df[,colnames(h9_df)[-c(1,2)]] %>% 
+  cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+  round(2)    )[,26]
+
+p_values3 <- ((h9_df[,colnames(h9_df)[-c(1,2)]] %>%
+  as.matrix() %>% 
+  Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+  round(3))[,26]
+
+h9_harm_cor_matrix <- cbind(cor_coef3, p_values3) %>% as.data.frame()
+
+#correlation table
+  h9_harm_cor_matrix
+
+#visual overview of the correlations
+  h9_harm_cor_matrix_figure <- h9_harm_cor_matrix[-c(26:28), ] %>% arrange(desc(cor_coef3))
+  dotchart(h9_harm_cor_matrix_figure$cor_coef3,
+           labels=row.names(h9_harm_cor_matrix_figure),
+           cex=1,
+           lcolor = "lightblue",
+           xlab="Correlation between Concern for Harm and the Target Emotion (Y-axis)",
+           xlim = c(-0.2, 0.4))
+  abline(v = 0, col="azure3", lwd=2, lty=2)
+
+
+```
+
+
+2) "Gheirat type-sacred boundary violation": Among the correlations between this items and the affective experience items, the strongest correlations will be with feelings of "anger, hostility, daring, alert, strong, disgust, loathing." 
+
+```{r}
+#correlation analyses
+cor_coef4 <- (h9_df[,colnames(h9_df)[-c(1,2)]] %>% 
+  cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+  round(2)    )[,27]
+
+p_values4 <- ((h9_df[,colnames(h9_df)[-c(1,2)]] %>%
+  as.matrix() %>% 
+  Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+  round(3))[,27]
+
+h9_boundary_cor_matrix <- cbind(cor_coef4, p_values4) %>% as.data.frame()
+
+#correlation table
+  h9_boundary_cor_matrix
+
+#visual overview of the correlations
+  h9_boundary_cor_matrix_figure <- h9_boundary_cor_matrix[-c(26:28), ]  %>% arrange(desc(cor_coef4))
+  
+  dotchart(h9_boundary_cor_matrix_figure$cor_coef4,
+           labels=row.names(h9_boundary_cor_matrix_figure),
+           cex=1,
+          lcolor = "lightblue",
+           xlab="Correlation between Concern for Namoos' Boundary and the Target Emotion (Y-axis)",
+           xlim = c(-0.2, 0.4))
+  abline(v = 0, col="azure3", lwd=2, lty=2)
+
+
+```
+
+
+3) "Gheirat type-loss": Among the correlations between this items and the affective experience items, the strongest correlations will be with feelings of "anxious, sad, lonely."
+
+```{r}
+#correlation analyses
+cor_coef5 <- (h9_df[,colnames(h9_df)[-c(1,2)]] %>% 
+  cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+  round(2)    )[,28]
+
+p_values5 <- ((h9_df[,colnames(h9_df)[-c(1,2)]] %>%
+  as.matrix() %>% 
+  Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+  round(3))[,28]
+
+h9_loss_cor_matrix <- cbind(cor_coef5, p_values5) %>% as.data.frame()
+
+#correlation table
+  h9_loss_cor_matrix
+
+
+#visual overview of the correlations
+  h9_loss_cor_matrix_figure <- h9_loss_cor_matrix[-c(26:28), ]  %>% arrange(desc(cor_coef5))
+  
+  dotchart(h9_loss_cor_matrix_figure$cor_coef5,
+           labels=row.names(h9_loss_cor_matrix_figure),
+           cex=1,
+          lcolor = "lightblue",
+           xlab="Correlation between Concern for Losing Namoos to a Rival and the Target Emotion (Y-axis)",
+           xlim = c(-0.4, 0.5))
+  abline(v = 0, col="azure3", lwd=2, lty=2)
+
+```
+
+
+# Additional analyses
+
+## Descriptives for coding of violations
+
+```{r}
+#labeling the levels of the Codes
+df$Code1 <- factor(df$Code1,levels = c(0, 1),
+                    labels = c("No", "Yes"))
+
+df$Code2 <- factor(df$Code2,levels = c(0, 1),
+                    labels = c("No", "Yes"))
+
+df$Code3 <- factor(df$Code3,levels = c(0, 1),
+                    labels = c("No", "Yes"))
+
+#perception of harm/insult
+  percentage(df$Code1) 
+#boundary violation by a third person
+  percentage(df$Code2) 
+#boundary violation by namoos
+  percentage(df$Code3) 
+
+#what percentage had more than one code?
+  df$MorethanOne <- factor(df$MorethanOne,levels = c(0, 1),
+                      labels = c("One Code", "More than one code"))
+  percentage(df$MorethanOne) 
+```
+
+
+## Frequency and gender diff. in violations
+
+```{r}
+#Cochran's Q test of the difference in the frequency of violations
+  df_coding_analyses <- df[, c("ParticipantNo", "gender", "Code1", "Code2", "Code3")]
+  df_coding_analyses$ParticipantNo <- as.factor(df_coding_analyses$ParticipantNo)
+  #head(df_coding_analyses)
+  
+  df_coding_analyses_NAremoved <- df_coding_analyses[complete.cases(df_coding_analyses[, 3:5]), ]
+  
+  df_coding_analyses_long <- tidyr::gather(data = df_coding_analyses_NAremoved, 
+                                    key = Code, 
+                                    value = Present, 
+                                    Code1:Code3,
+                                    factor_key = TRUE)
+  df_coding_analyses_long$Present <- as.factor(df_coding_analyses_long$Present)
+  
+  cochran.qtest(Present ~ Code | ParticipantNo,
+                data = df_coding_analyses_long)
+
+#X2 test of gender differences in frequency of violations
+
+  #gender difference in the code: "Perception of harm/insult"
+  c1_table <- xtabs( ~ gender + Code1,
+                     data=df)
+  prop.table(c1_table, 1) #percentages
+  chisq.test(df$gender, df$Code1)
+  
+  #gender difference in the code: "boundary violation by a 3rd person"
+  c2_table <- xtabs( ~ gender + Code2,
+                     data=df)
+  prop.table(c2_table, 1) #percentages
+  chisq.test(df$gender, df$Code2)
+  
+  #gender difference in the code: "boundary violation by namoos"
+  c3_table <- xtabs( ~ gender + Code3,
+                     data=df)
+  prop.table(c3_table, 1) #percentages
+  chisq.test(df$gender, df$Code3)
+  
+
+```
+
+## Affective experience of gheirat
+
+### PCA of Emotions
+
+```{r}
+    item_list <- paste0("Q4_", 1:25)
+    
+# df with relevant variables
+    emotion_df <- df[,c("ParticipantNo", "gender","Code1", "Code2", "Code3",item_list)] 
+    
+    colnames(emotion_df) <- c("ParticipantNo","gender", 
+                              "harm_insult", "third_pers_violation","namoos_violation",                           "embarrased","surprised","relaxed","disgusted_with_self",
+                              "sad","afraid","happy","lonely","shy","guilty",
+                              "proud","lively","angry_at_self","enthusiastic",
+                              "disgusted","alert","daring","strong","angry",
+                              "irritable","upset","anxious","excited",
+                              "hostile","loathing")
+
+
+#df with only emotion items    
+    emotion_PCA <- emotion_df[complete.cases(emotion_df[,6:30]), 6:30]
+
+#first, PCA with max # of components (i.e., 25)
+        PCA_max <- psych::principal(emotion_PCA, nfactors = 25, rotate = "varimax") 
+        PCA_max$values #eigenvalues
+        plot(PCA_max$values, type = "b", xlab = "Component", ylab = "Eigenvalue")
+        abline(a = 1, b = 0, col = "red", lty = 2)#screeplot 
+
+#PCA: 5-component model
+        PCA_2 <- psych::principal(emotion_PCA, nfactors = 5, oblique.scores = FALSE) 
+        psych::kaiser(PCA_2, rotate = "Varimax")
+
+        
+#PCA: 4-component model after excluding 3 items (see online supplement)
+        emotion_PCA2 <- select(emotion_PCA, -c("surprised", "sad", "alert"))
+        PCA_3 <- psych::principal(emotion_PCA2, nfactors = 4, oblique.scores = FALSE)
+        plot(PCA_3$values, type = "b", xlab = "Component", ylab = "Eigenvalue")
+        abline(a = 1, b = 0, col = "red", lty = 2)#screeplot 
+        psych::kaiser(PCA_3, rotate = "Varimax") %>% psych::fa.sort()
+    #KMO
+        psych::KMO(emotion_PCA2)
+
+        PCA_output <-psych::kaiser(PCA_3, rotate = "Varimax") %>% psych::fa.sort()
+        #output
+        PCA_output
+        #write.csv(PCA_output[["loadings"]], "emotion_PCA.csv")
+```
+
+### Scoring emotion components
+
+```{r}
+
+emotion_key <- list(
+  hostility = c("angry", "loathing", "hostile", "disgusted", "upset", "excited", "irritable"),
+  self_blame = c("angry_at_self", "guilty", "disgusted_with_self", "embarrased"),
+  bold_empowered = c("lively", "proud", "enthusiastic", "happy", "daring", "strong", "relaxed"),
+  socially_fearful = c("afraid", "shy", "anxious", "lonely")
+)
+
+emotion.categories <- psych::scoreItems(emotion_key, emotion_df, impute = "none")
+#internal consistencies
+  emotion.categories[["alpha"]]
+
+df <- cbind(df, emotion.categories$scores)
+emotion_df <- cbind(emotion_df, emotion.categories$scores)
+```
+
+### Descriptives and intercorrelations
+
+```{r}
+cor_coef6 <- (emotion_df[,colnames(emotion_df)[-c(1:30)]] %>% 
+              cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+              round(2))
+
+p_values6 <- ((emotion_df[,colnames(emotion_df)[-c(1:30)]] %>%
+  as.matrix() %>% 
+  Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+  round(3))
+
+#intercorrelations
+  cor_coef6
+#p-values
+  p_values6
+
+#Means (SD)
+  psych::describe(emotion_df$hostility)
+  psych::describe(emotion_df$self_blame)
+  psych::describe(emotion_df$bold_empowered)
+  psych::describe(emotion_df$socially_fearful)
+
+```
+
+### Differences between emotion categories 
+
+```{r}
+#setting up a long df    
+    emotion_df_scores <- select(emotion_df, -c(6:30))
+    emotion_df_long <- tidyr::gather(data = emotion_df_scores, 
+                                     key = emotion_category, 
+                                     value = intensity, 
+                                     hostility:socially_fearful,
+                                     factor_key = TRUE)
+
+    #str(emotion_df_long)
+#setting up the contrasts    
+    contrasts(emotion_df_long$gender) <- contr.sum
+    contrasts(emotion_df_long$emotion_category) <- contr.sum
+
+#anova
+model0 <- lmer(intensity ~ emotion_category + (1 | ParticipantNo),
+               data = emotion_df_long)
+
+          anova(model0)
+          effectsize::eta_squared(model0, partial = T)
+          
+#post-hoc of the main effect of emotion category
+          em_model0 <- emmeans::emmeans(model0, ~ emotion_category) 
+        em_model0 %>% 
+            pairs(simple = c("emotion_category"), combine = TRUE, adjust = "holm")
+
+    #effect sizes    
+        compare(emotion_df$hostility, emotion_df$self_blame)
+        compare(emotion_df$hostility, emotion_df$bold_empowered)
+        compare(emotion_df$hostility, emotion_df$socially_fearful)
+        compare(emotion_df$hostility, emotion_df$self_blame)
+        compare(emotion_df$socially_fearful, emotion_df$self_blame)
+        compare(emotion_df$socially_fearful, emotion_df$bold_empowered)
+        compare(emotion_df$bold_empowered, emotion_df$self_blame)
+
+#adding gender as a moderator
+model1 <- lmer(intensity ~ emotion_category * gender + (1 | ParticipantNo),
+               data = emotion_df_long)
+
+          anova(model1)
+          effectsize::eta_squared(model1, partial = T)
+
+```
+
+
+### Emotions associated with different elicitors
+
+```{r}
+#outcome: hostility
+
+    model_h <- lm(hostility ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = emotion_df)
+    summary(model_h)
+    lm.beta::lm.beta(model_h) #standardized betas
+
+
+#outcome: self-blame
+
+    model_sb <- lm(self_blame ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = emotion_df)
+    summary(model_sb)
+    lm.beta::lm.beta(model_sb) #standardized betas
+
+#outcome: bold/empowered
+
+    model_be <- lm(bold_empowered ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = emotion_df)
+    summary(model_be)
+    lm.beta::lm.beta(model_be) #standardized betas
+
+#outcome: socially fearful
+
+    model_sf <- lm(socially_fearful ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = emotion_df)
+    summary(model_sf)
+    lm.beta::lm.beta(model_sf) #standardized betas    
+        
+```
+
+
+Adding gender to the models above (as a predictor)
+
+```{r}
+#to compare models with and without gender, they must be run on the same samples. So we rerun the above models with listwise deletion that includes gender.
+emotion_df_NAremoved <- emotion_df[complete.cases(emotion_df[,c("gender", "self_blame", "harm_insult", "third_pers_violation", "namoos_violation")]),] 
+
+
+#outcome: hostility
+    model_h_NAremoved <- lm(hostility ~ harm_insult + third_pers_violation + namoos_violation, data = emotion_df_NAremoved)
+    model_h2 <- lm(hostility ~ harm_insult + third_pers_violation + namoos_violation + gender, data = emotion_df_NAremoved)
+    anova(model_h_NAremoved, model_h2)
+    
+
+#outcome: self-blame
+
+    model_sb_NAremoved <- lm(self_blame ~ harm_insult + third_pers_violation + namoos_violation, data = emotion_df_NAremoved)
+    model_sb2 <- lm(self_blame ~ harm_insult + third_pers_violation + namoos_violation + gender, data = emotion_df_NAremoved)
+    anova(model_sb_NAremoved, model_sb2)
+
+    summary(model_sb2)  
+    lm.beta::lm.beta(model_sb2) #standardized betas
+    
+#outcome: bold/empowered
+
+    model_be_NAremoved <- lm(bold_empowered ~ harm_insult + third_pers_violation + namoos_violation, data = emotion_df_NAremoved)    
+    model_be2 <- lm(bold_empowered ~ harm_insult + third_pers_violation + namoos_violation + gender, data = emotion_df_NAremoved)
+    anova(model_be_NAremoved, model_be2)
+    
+#outcome: socially fearful
+
+    model_sf2_NAremoved <- lm(socially_fearful ~ harm_insult + third_pers_violation + namoos_violation, data = emotion_df_NAremoved)
+    model_sf2 <- lm(socially_fearful ~ harm_insult + third_pers_violation + namoos_violation + gender, data = emotion_df_NAremoved)
+    anova(model_sf2_NAremoved, model_sf2)   
+        
+```
+
+
+
+## Physiological Symptoms  
+
+
+```{r}
+    item_list <- paste0("Q10_", 1:10)
+
+#df with relevant variables
+    physio_df <- df[,c("ParticipantNo", "gender","Code1", "Code2", "Code3",item_list)] 
+    
+    #labeling the levels
+        label_physio <- function(var) {
+                                      factor(var,levels = c(1,2,3),
+                                      labels = c("yes", "no", "don't know"))
+                        }
+        
+        physio_df[,item_list] <- lapply(physio_df[,item_list], label_physio)
+    
+        
+    
+    colnames(physio_df) <- c("ParticipantNo","gender", 
+                              "harm_insult", "third_pers_violation",
+                              "namoos_violation","lump_in_throat",
+                              "change_in_breathing","stomach_troubles",
+                              "feeling_cold_shivering",
+                              "feeling_warm_pleasant",
+                              "feeling_hot_cheeks_burning","heart_beating_faster",
+                              "muscles_tensing_trembling","muscles_relaxing_restful",
+                              "perspiring_moist_hands")
+    sink("NULL") #this suppresses the output of lapply
+    physio_percentages <- lapply(physio_df[,6:15], percentage)
+    sink() 
+```
+
+### Response proportions for each symptom        
+
+```{r}
+    physio_percentages
+    
+#X2 for each physiological symptom
+    
+    physio_chisquare1 <- function(var) {
+      levels(var)[levels(var)=="don't know"] <- NA
+        one <- chisq.test(physio_df$harm_insult, var) %>% print
+        }
+    
+    physio_chisquare2 <- function(var) {
+      levels(var)[levels(var)=="don't know"] <- NA
+        two <- chisq.test(physio_df$third_pers_violation, var) %>% print
+        }
+    
+    physio_chisquare3 <- function(var) {
+        levels(var)[levels(var)=="don't know"] <- NA
+        three <- chisq.test(physio_df$namoos_violation, var) %>% print
+        }
+            
+
+    
+    sink("NULL") #this suppresses the output of lapply
+    physio_chi1 <- lapply(physio_df[,6:15], physio_chisquare1)
+    physio_chi2 <- lapply(physio_df[,6:15], physio_chisquare2)
+    physio_chi3 <- lapply(physio_df[,6:15], physio_chisquare3)
+    sink()
+
+    #X2 output
+      #perception of harm/insult
+      physio_chi1 
+      #third person violation
+      physio_chi2 
+      #namoos violation
+      physio_chi3 
+    
+  #cross-tabs for the sig. results
+    # stomach_troubles
+    physio_df$stomach_troubles_excludeDK <- physio_df$stomach_troubles
+    levels(physio_df$stomach_troubles_excludeDK)[levels(physio_df$stomach_troubles_excludeDK)=="don't know"] <- NA
+    phys_table1 <- xtabs( ~ namoos_violation + stomach_troubles_excludeDK,
+                     data=physio_df)
+    prop.table(phys_table1, 1)
+    
+    # feeling_cold_shivering
+    physio_df$feeling_cold_shivering_excludeDK <- physio_df$feeling_cold_shivering
+    levels(physio_df$feeling_cold_shivering_excludeDK)[levels(physio_df$feeling_cold_shivering_excludeDK)=="don't know"] <- NA
+    phys_table2 <- xtabs( ~ namoos_violation + feeling_cold_shivering_excludeDK,
+                     data=physio_df)
+    prop.table(phys_table2, 1)
+    
+```
+
+
+## Gender differences in physiological symptoms
+
+```{r}
+#X2 tests
+    physioxgender_chisquare <- function(var) {
+      levels(var)[levels(var)=="don't know"] <- NA
+        one <- chisq.test(physio_df$gender, var) %>% print
+        }
+    sink("NULL") #this suppresses the output of lapply
+    physioxgender <- lapply(physio_df[,6:15], physioxgender_chisquare)
+    sink()
+
+    #output
+    physioxgender
+
+#cross-tabs for the sig. results
+    # feeling_cold_shivering
+    #physio_df$feeling_cold_shivering_excludeDK
+    phys_table3 <- xtabs( ~ gender + feeling_cold_shivering_excludeDK,
+                     data=physio_df)
+    prop.table(phys_table3, 1)
+    
+    
+    # heart_beating_faster
+    physio_df$heart_beating_faster_excludeDK <- physio_df$heart_beating_faster
+    levels(physio_df$heart_beating_faster_excludeDK)[levels(physio_df$heart_beating_faster_excludeDK)=="don't know"] <- NA
+    #physio_df$heart_beating_faster_excludeDK
+    phys_table4 <- xtabs( ~ gender + heart_beating_faster_excludeDK,
+                     data=physio_df)
+    prop.table(phys_table4, 1) 
+```
+
+
+## Expressive/Behavioral responses
+
+```{r}
+    item_list <- paste0("Q11_", 1:10)
+
+# df with relevant variables
+    reactions_df <- df[,c("ParticipantNo", "gender","Code1", "Code2", "Code3",item_list, "Q13")] 
+    
+    #dichotomizing Q13   
+    reactions_df$Q13 <- factor(reactions_df$Q13, levels = c(1,2,3,4),
+                                      labels = c("no", "a little", "a lot", "dont know"))
+    
+    reactions_df$tried_to_hide_feeling <- rockchalk::combineLevels(reactions_df$Q13, 
+                                                       levs = c(2, 3),
+                                                       newLabel = "yes")
+    
+  
+    
+    #labeling the levels
+        label_reactions <- function(var) {
+                                      factor(var,levels = c(1,2,3),
+                                      labels = c("yes", "no", "don't know"))
+                        }
+        
+        reactions_df[,item_list] <- lapply(reactions_df[,item_list], label_reactions)
+        #removing Q13
+        reactions_df <- select(reactions_df, -c("Q13"))
+                emotion_PCA2 <- select(emotion_PCA, -c("surprised", "sad", "alert"))
+
+    
+    colnames(reactions_df) <- c("ParticipantNo","gender", 
+                              "harm_insult", "third_pers_violation",
+                              "namoos_violation","laughin_smiling",
+                              "crying_sobbing","other_changes_in_face",
+                              "screaming_yelling",
+                              "other_changes_in_voice",
+                              "change_in_gesturing","abrupt_bodily_movements",
+                              "tendency_phys_violence","tendency_agression",
+                              "tendency_withdrawal","tried_to_hide_feeling")
+    sink("NULL") #this suppresses the output of lapply
+    reactions_percentages <- lapply(reactions_df[,6:16], percentage)
+    sink() 
+    
+    reactions_percentages
+```
+
+### Differences between elicitors (violations)
+
+```{r warning=FALSE}
+
+#X2 for each Expressive behavior
+    
+    reactions_chisquare1 <- function(var) {
+      levels(var)[levels(var)=="don't know"] <- NA
+        chisq.test(reactions_df$harm_insult, var, correct = FALSE) %>% print
+        }
+    
+    reactions_chisquare2 <- function(var) {
+      levels(var)[levels(var)=="don't know"] <- NA
+        chisq.test(reactions_df$third_pers_violation, var) %>% print
+        }
+    
+    reactions_chisquare3 <- function(var) {
+        levels(var)[levels(var)=="don't know"] <- NA
+        chisq.test(reactions_df$namoos_violation, var) %>% print
+        }
+            
+
+    
+    sink("NULL") #this suppresses the output of lapply
+    reactions_chi1 <- lapply(reactions_df[,6:16], reactions_chisquare1)
+    reactions_chi2 <- lapply(reactions_df[,6:16], reactions_chisquare2)
+    reactions_chi3 <- lapply(reactions_df[,6:16], reactions_chisquare3)
+    sink()
+
+    #X2 output
+        #perception of harm/insult
+        reactions_chi1 
+        #third person violation
+        reactions_chi2 
+        #namoos violation
+        reactions_chi3 
+    
+  #cross-tabs for the sig. results
+    # laughing, smiling
+    reactions_df$laughin_smiling_excDK <- reactions_df$laughin_smiling
+    levels(reactions_df$laughin_smiling_excDK)[levels(reactions_df$laughin_smiling_excDK)=="don't know"] <- NA
+    reactions_table1 <- xtabs( ~ harm_insult + laughin_smiling_excDK,
+                     data=reactions_df)
+    prop.table(reactions_table1, 1)
+    
+    reactions_table2 <- xtabs( ~ namoos_violation + laughin_smiling_excDK,
+                     data=reactions_df)
+    prop.table(reactions_table2, 1) 
+    
+
+    # crying, sobbing
+    reactions_df$crying_sobbingDK <- reactions_df$crying_sobbing
+    levels(reactions_df$crying_sobbingDK)[levels(reactions_df$crying_sobbingDK)=="don't know"] <- NA
+    reactions_table3 <- xtabs( ~ namoos_violation + crying_sobbingDK,
+                              data=reactions_df)
+    prop.table(reactions_table3, 1)
+
+    
+    # screaming, yelling
+    reactions_df$screaming_yellingDK <- reactions_df$screaming_yelling
+    levels(reactions_df$screaming_yellingDK)[levels(reactions_df$screaming_yellingDK)=="don't know"] <- NA
+    reactions_table4 <- xtabs( ~ harm_insult + screaming_yellingDK,
+                                data=reactions_df)
+    prop.table(reactions_table4, 1)
+
+
+    # tendency towards violence
+    reactions_df$tendency_phys_violence_excDK <- reactions_df$tendency_phys_violence
+    levels(reactions_df$tendency_phys_violence_excDK)[levels(reactions_df$tendency_phys_violence_excDK)=="don't know"] <- NA
+    reactions_table5 <- xtabs( ~ harm_insult + tendency_phys_violence_excDK,
+                     data=reactions_df)
+    prop.table(reactions_table5, 1)
+    
+    reactions_table6 <- xtabs( ~ namoos_violation + tendency_phys_violence_excDK,
+                     data=reactions_df)
+    prop.table(reactions_table6, 1)
+
+    
+    # tendency towards verbal aggression
+    reactions_df$tendency_agressionDK <- reactions_df$tendency_agression
+    levels(reactions_df$tendency_agressionDK)[levels(reactions_df$tendency_agressionDK)=="don't know"] <- NA
+    reactions_table7 <- xtabs( ~ namoos_violation + tendency_agressionDK,
+                                data=reactions_df)
+    prop.table(reactions_table7, 1) 
+
+
+    # tendency towards withdrawal from others
+    reactions_df$tendency_withdrawalDK <- reactions_df$tendency_withdrawal
+    levels(reactions_df$tendency_withdrawalDK)[levels(reactions_df$tendency_withdrawalDK)=="don't know"] <- NA
+    reactions_table7 <- xtabs( ~ harm_insult + tendency_withdrawalDK,
+                     data=reactions_df)
+    prop.table(reactions_table7, 1) 
+    
+    reactions_table8 <- xtabs( ~ namoos_violation + tendency_withdrawalDK,
+                     data=reactions_df)
+    prop.table(reactions_table8, 1) 
+
+
+    # tried to hide feelings from others
+    reactions_df$tried_to_hide_feelingDK <- reactions_df$tried_to_hide_feeling
+    levels(reactions_df$tried_to_hide_feelingDK)[levels(reactions_df$tried_to_hide_feelingDK)=="dont know"] <- NA
+    reactions_table9 <- xtabs( ~ harm_insult + tried_to_hide_feelingDK,
+                     data=reactions_df)
+    prop.table(reactions_table9, 1)
+    
+    reactions_table10 <- xtabs( ~ namoos_violation + tried_to_hide_feelingDK,
+                     data=reactions_df)
+    prop.table(reactions_table10, 1)  
+```
+
+
+### Gender differences in Expressive/Behavioral responses
+
+```{r}
+#X2 for Gender by Expression
+    reactionsxgender_chisquare1 <- function(var) {
+      levels(var)[levels(var)=="don't know"] <- NA
+        chisq.test(reactions_df$gender, var, correct = FALSE) %>% print
+        }
+
+    sink("NULL") #this suppresses the output of lapply
+    reactionsxgender_chi1 <- lapply(reactions_df[,6:16], reactionsxgender_chisquare1)
+    sink()
+ #X2 output
+    reactionsxgender_chi1
+    
+
+  #cross-tabs for the sig. results
+    # laughing, smiling
+    reactions_table11 <- xtabs( ~ gender + laughin_smiling_excDK,
+                     data=reactions_df)
+    prop.table(reactions_table11, 1)  
+
+    # crying, sobbing
+    reactions_table12 <- xtabs( ~ gender + crying_sobbingDK,
+                              data=reactions_df)
+    prop.table(reactions_table12, 1) 
+
+    # tendency towards physical violence
+    reactions_table13 <- xtabs( ~ gender + tendency_phys_violence_excDK,
+                     data=reactions_df)
+    prop.table(reactions_table13, 1) 
+
+    
+#Cross-tabs for Expressive reactions X Gender
+    reactionsxgender_xtab <- function(var) {
+              xtabs(~ reactions_df$gender + var)
+        }
+
+    lapply(reactions_df[,6:16], reactionsxgender_xtab)
+    
+
+```
+
+
+## General Evaluations (appraisals) of the event
+
+```{r}
+#creating the dataframe with relevant variables
+
+    evaluations_df <- df[,c("ParticipantNo", "gender","Code1", "Code2", "Code3",
+                           "Pleasant", "unfair", "Expected", "JudgedImproper",
+                           "Goals", "Selfesteem", "ChangeRelationship",
+                           "WhoResponsible")] 
+
+        colnames(evaluations_df) <- c("ParticipantNo","gender", 
+                              "harm_insult", "third_pers_violation",
+                              "namoos_violation",
+                              "pleasantness", "unfair",
+                              "expected","improper_immoral",
+                              "influence_goals",
+                              "influence_selfsteem",
+                              "influence_relation","who_was_responsible")
+
+
+#labeling the response options
+        #note: "don't know-no comment" has previously been labeled as NA
+  evaluations_df$pleasantness <- factor(evaluations_df$pleasantness,levels = c(1,2,3),
+                    labels = c("pleasant", "neutral", "unpleasant")) 
+
+  evaluations_df$unfair <- factor(evaluations_df$unfair,levels = c(1,2,3),
+                    labels = c("fair", "a little unfair", "very unfair")) 
+
+  evaluations_df$expected <- factor(evaluations_df$expected,levels = c(1,2,3),
+                    labels = c("unexpected", "a little expected", "completely expected")) 
+
+  evaluations_df$improper_immoral <- factor(evaluations_df$improper_immoral,levels = c(1,2,3),
+                    labels = c("not improper", "a little improper", "very improper")) 
+
+  evaluations_df$influence_goals <- factor(evaluations_df$influence_goals,levels = c(1,2,3),
+                    labels = c("helped", "neutral", "hindered"))
+
+  evaluations_df$influence_selfsteem <- factor(evaluations_df$influence_selfsteem,levels = c(1,2,3),
+                    labels = c("negative", "neutral", "positive"))
+
+  
+  evaluations_df$influence_relation <- factor(evaluations_df$influence_relation,levels = c(1,2,3),
+                    labels = c("negative", "neutral", "positive"))
+
+  evaluations_df$who_was_responsible <- factor(evaluations_df$who_was_responsible,levels = c(1,2,3,4,5,6,7,11),
+                    labels = c("myself", "target", "third person",
+                               "Irans culture", "natural forces",
+                               "supernatural forces", "fate & destiny",
+                               "dont know")) 
+        levels(evaluations_df$who_was_responsible)[levels(evaluations_df$who_was_responsible)=='dont know'] <- NA
+```
+
+
+Calculating percentages for the Table OS2
+
+```{r}
+# prototype percentages
+  percentage(evaluations_df$pleasantness, FALSE) 
+  percentage(evaluations_df$unfair, FALSE)
+  percentage(evaluations_df$expected, FALSE)
+  percentage(evaluations_df$improper_immoral, FALSE)
+  percentage(evaluations_df$influence_goals, FALSE)
+  percentage(evaluations_df$influence_selfsteem, FALSE)
+  percentage(evaluations_df$influence_relation, FALSE)
+  percentage(evaluations_df$who_was_responsible, FALSE)
+
+  
+# percentages when there's a perception of harm or insult
+  evaluations_df_harm <- dplyr::filter(evaluations_df, evaluations_df$harm_insult == "Yes")
+
+  h1 <- percentage(evaluations_df_harm$pleasantness, FALSE) %>% as.data.frame()
+  h2 <- percentage(evaluations_df_harm$unfair, FALSE) %>% as.data.frame()
+  h3 <- percentage(evaluations_df_harm$expected, FALSE) %>% as.data.frame()
+  h4 <- percentage(evaluations_df_harm$improper_immoral, FALSE) %>% as.data.frame()
+  h5 <- percentage(evaluations_df_harm$influence_goals, FALSE) %>% as.data.frame()
+  h6 <- percentage(evaluations_df_harm$influence_selfsteem, FALSE) %>% as.data.frame()
+  h7 <- percentage(evaluations_df_harm$influence_relation, FALSE) %>% as.data.frame()
+  h8 <- percentage(evaluations_df_harm$who_was_responsible, FALSE) %>% as.data.frame()
+  
+  h_all <- rbind(h1, h2, h3, h4, h5, h6, h7, h8)
+  
+
+  
+
+# percentages when there's a violation by a third person
+  evaluations_df_third <- dplyr::filter(evaluations_df, evaluations_df$third_pers_violation == "Yes")
+
+  t1 <- percentage(evaluations_df_third$pleasantness, FALSE) %>% as.data.frame()
+  t2 <- percentage(evaluations_df_third$unfair, FALSE) %>% as.data.frame()
+  t3 <- percentage(evaluations_df_third$expected, FALSE) %>% as.data.frame()
+  t4 <- percentage(evaluations_df_third$improper_immoral, FALSE) %>% as.data.frame()
+  t5 <- percentage(evaluations_df_third$influence_goals, FALSE) %>% as.data.frame()
+  t6 <- percentage(evaluations_df_third$influence_selfsteem, FALSE) %>% as.data.frame()
+  t7 <- percentage(evaluations_df_third$influence_relation, FALSE) %>% as.data.frame()
+  t8 <- percentage(evaluations_df_third$who_was_responsible, FALSE) %>% as.data.frame()
+  
+  t_all <- rbind(t1, t2, t3, t4, t5, t6, t7, t8)
+  
+
+  
+  
+# percentages when there's a violation by a namoos
+  evaluations_df_namoos <- dplyr::filter(evaluations_df, evaluations_df$namoos_violation == "Yes")
+
+  n1 <- percentage(evaluations_df_namoos$pleasantness, FALSE) %>% as.data.frame()
+  n2 <- percentage(evaluations_df_namoos$unfair, FALSE) %>% as.data.frame()
+  n3 <- percentage(evaluations_df_namoos$expected, FALSE) %>% as.data.frame()
+  n4 <- percentage(evaluations_df_namoos$improper_immoral, FALSE) %>% as.data.frame()
+  n5 <- percentage(evaluations_df_namoos$influence_goals, FALSE) %>% as.data.frame()
+  n6 <- percentage(evaluations_df_namoos$influence_selfsteem, FALSE) %>% as.data.frame()
+  n7 <- percentage(evaluations_df_namoos$influence_relation, FALSE) %>% as.data.frame()
+  n8 <- percentage(evaluations_df_namoos$who_was_responsible, FALSE) %>% as.data.frame()
+  
+  n_all <- rbind(n1, n2, n3, n4, n5, n6, n7, n8)
+  
+
+
+# percentages for women
+  evaluations_df_women <- dplyr::filter(evaluations_df, evaluations_df$gender == "female")
+
+  w1 <- percentage(evaluations_df_women$pleasantness, FALSE) %>% as.data.frame()
+  w2 <- percentage(evaluations_df_women$unfair, FALSE) %>% as.data.frame()
+  w3 <- percentage(evaluations_df_women$expected, FALSE) %>% as.data.frame()
+  w4 <- percentage(evaluations_df_women$improper_immoral, FALSE) %>% as.data.frame()
+  w5 <- percentage(evaluations_df_women$influence_goals, FALSE) %>% as.data.frame()
+  w6 <- percentage(evaluations_df_women$influence_selfsteem, FALSE) %>% as.data.frame()
+  w7 <- percentage(evaluations_df_women$influence_relation, FALSE) %>% as.data.frame()
+  w8 <- percentage(evaluations_df_women$who_was_responsible, FALSE) %>% as.data.frame()
+  
+  w_all <- rbind(w1, w2, w3, w4, w5, w6, w7, w8)
+
+
+# percentages for men
+  evaluations_df_men <- dplyr::filter(evaluations_df, evaluations_df$gender == "male")
+
+  m1 <- percentage(evaluations_df_men$pleasantness, FALSE) %>% as.data.frame()
+  m2 <- percentage(evaluations_df_men$unfair, FALSE) %>% as.data.frame()
+  m3 <- percentage(evaluations_df_men$expected, FALSE) %>% as.data.frame()
+  m4 <- percentage(evaluations_df_men$improper_immoral, FALSE) %>% as.data.frame()
+  m5 <- percentage(evaluations_df_men$influence_goals, FALSE) %>% as.data.frame()
+  m6 <- percentage(evaluations_df_men$influence_selfsteem, FALSE) %>% as.data.frame()
+  m7 <- percentage(evaluations_df_men$influence_relation, FALSE) %>% as.data.frame()
+  m8 <- percentage(evaluations_df_men$who_was_responsible, FALSE) %>% as.data.frame()
+  
+  m_all <- rbind(m1, m2, m3, m4, m5, m6, m7, m8)
+  
+```
+
+Percentages for the Figure OS3
+
+```{r}
+    evaluations_xtabs1 <- function(var) {
+        evaluations_table <- xtabs( ~ evaluations_df$harm_insult + var)
+        prop.table(evaluations_table, 1)
+        }
+
+    evaluations_xtabs2 <- function(var) {
+        evaluations_table <- xtabs( ~ evaluations_df$third_pers_violation + var)
+        prop.table(evaluations_table, 1)
+        }
+    evaluations_xtabs3 <- function(var) {
+        evaluations_table <- xtabs( ~ evaluations_df$namoos_violation + var)
+        prop.table(evaluations_table, 1)
+        }
+    
+    
+    sink("NULL") #this suppresses the output of lapply
+    evaluations_xtabs_harm <- lapply(evaluations_df[,6:13], evaluations_xtabs1) 
+    evaluations_xtabs_other <- lapply(evaluations_df[,6:13], evaluations_xtabs2) 
+    evaluations_xtabs_namoos <- lapply(evaluations_df[,6:13], evaluations_xtabs3) 
+    sink()
+    
+    # cross-tabs
+    evaluations_xtabs_harm
+    evaluations_xtabs_other
+    evaluations_xtabs_namoos
+
+    
+   
+```
+
+### Chi-square tests of evaluations X violations
+
+```{r warning=FALSE}
+    evaluations_chisquare1 <- function(var) {
+        chisq.test(evaluations_df$harm_insult, var) %>% print
+        }
+    
+    evaluations_chisquare2 <- function(var) {
+        chisq.test(evaluations_df$third_pers_violation, var) %>% print
+        }
+    
+    evaluations_chisquare3 <- function(var) {
+        chisq.test(evaluations_df$namoos_violation, var) %>% print
+        }
+            
+
+    
+    sink("NULL") #this suppresses the output of lapply
+    evaluations_chi1 <- lapply(evaluations_df[,6:13], evaluations_chisquare1)
+    evaluations_chi2 <- lapply(evaluations_df[,6:13], evaluations_chisquare2)
+    evaluations_chi3 <- lapply(evaluations_df[,6:13], evaluations_chisquare3)
+    sink()
+
+    #X2 output
+      #perception of harm/insult
+      evaluations_chi1 
+      #third person violation
+      evaluations_chi2 
+      #namoos violation
+      evaluations_chi3 
+```
+
+### Chi-square tests of evaluations X gender
+
+```{r warning=FALSE}
+    evaluationsxgender_chisquare <- function(var) {
+        chisq.test(evaluations_df$gender, var) %>% print
+        }
+    
+
+    sink("NULL") #this suppresses the output of lapply
+    evaluationsxgender_chisquare <- lapply(evaluations_df[,6:13], evaluationsxgender_chisquare)
+    sink()
+
+    #X2 output
+    evaluationsxgender_chisquare
+```
+
+
+## Gheirat-Specific Appraisals
+
+### PCA of Appraisals
+
+```{r}
+    item_list <- paste0("Q24_", 1:20)
+
+# df with relevant variables
+    appraisals_df <- df[,c("ParticipantNo", "gender","Code1", "Code2", "Code3",item_list)] 
+
+    
+    colnames(appraisals_df) <- c("ParticipantNo","gender", 
+                              "harm_insult", "third_pers_violation",
+                              "namoos_violation",                           
+                              "insecure","belittled","rejected",
+                              "hopeless","betrayed",
+                              "losing_something_valuable","responsible_for_someome",
+                              "someone_being_opressed","protective_toward_someone",
+                              "possessive_abt_someone",
+                              "boundary_crossed","someone_been_rude",
+                              "losing_face","good_abt_to_happen",
+                              "confident","determined","downhearted",
+                              "felt_liked","felt_respected",
+                              "focused")
+
+
+#df with only appraisal items    
+    appraisals_PCA <- appraisals_df[complete.cases(appraisals_df[,6:25]), 6:25]
+
+#first, max # of components (i.e., 20)
+        PCA_max <- psych::principal(appraisals_PCA, nfactors = 20, rotate = "varimax") 
+        PCA_max$values #eigenvalues
+        plot(PCA_max$values, type = "b", xlab = "Component", ylab = "Eigenvalue")
+        abline(a = 1, b = 0, col = "red", lty = 2)#screeplot 
+
+#4-component model
+        PCA_2 <- psych::principal(appraisals_PCA, nfactors = 4, oblique.scores = FALSE) 
+        psych::kaiser(PCA_2, rotate = "Varimax") %>% psych::fa.sort()
+
+        
+#3-component model after excluding 3 items (see manuscript)
+        appraisals_PCA2 <- select(appraisals_PCA, -c("losing_something_valuable", "determined", "possessive_abt_someone"))
+        PCA_3 <- psych::principal(appraisals_PCA2, nfactors = 3, oblique.scores = FALSE)
+        plot(PCA_3$values, type = "b", xlab = "Component", ylab = "Eigenvalue")
+        abline(a = 1, b = 0, col = "red", lty = 2)#screeplot 
+        psych::kaiser(PCA_3, rotate = "Varimax") %>% psych::fa.sort()
+    #KMO
+        psych::KMO(appraisals_PCA2)
+
+```
+
+Scoring Appraisal components
+
+```{r}
+
+appraisals_key <- list(
+  insecurity = c("hopeless", "belittled", "rejected", "downhearted", "betrayed", "insecure", "losing_face"),
+  responsibility = c("responsible_for_someome", "protective_toward_someone", "someone_been_rude", "someone_being_opressed", "boundary_crossed"),
+  self_worth = c("felt_respected", "felt_liked", "confident", "good_abt_to_happen", "focused")
+)
+
+appraisals.categories <- psych::scoreItems(appraisals_key, appraisals_df, impute = "none")
+
+df <- cbind(df, appraisals.categories$scores)
+appraisals_df <- cbind(appraisals_df, appraisals.categories$scores)
+```
+
+### Internal consistencies and intercorrelations
+
+```{r}
+#internal consistencies
+  appraisals.categories[["alpha"]]
+
+#correlations
+    cor_coef7 <- (appraisals_df[,colnames(appraisals_df)[-c(1:25)]] %>% 
+                  cor(method = "pearson", use = "pairwise.complete.obs") %>% 
+                  round(2))
+    
+    p_values7 <- ((appraisals_df[,colnames(appraisals_df)[-c(1:25)]] %>%
+      as.matrix() %>% 
+      Hmisc::rcorr(type = "pearson"))[["P"]] %>% 
+      round(3))
+
+#intercorrelations
+  cor_coef7
+#p-values
+  p_values7
+
+#descriptives
+  psych::describe(appraisals_df$insecurity)
+  psych::describe(appraisals_df$responsibility)
+  psych::describe(appraisals_df$self_worth)
+  
+#correlations between emotions and appraisals
+  emo_app_corr <- df[, c("hostility", "self_blame", "bold_empowered",
+                         "socially_fearful", "insecurity", "responsibility",
+                         "self_worth")]
+  as.matrix(emo_app_corr) %>% 
+                Hmisc::rcorr()
+
+```
+
+
+### Difference between gheirat-specific appraisals
+
+```{r}
+#setting up a long df    
+    appraisals_df_scores <- select(appraisals_df, -c(6:25))
+    appraisals_df_scores$ParticipantNo <- as.factor(appraisals_df_scores$ParticipantNo)
+    appraisals_df_long <- tidyr::gather(data = appraisals_df_scores, 
+                                     key = appraisals_category, 
+                                     value = intensity, 
+                                     insecurity:self_worth,
+                                     factor_key = TRUE)
+
+    
+    #str(appraisals_df_long)
+#setting up the contrasts    
+    contrasts(appraisals_df_long$gender) <- contr.sum
+    contrasts(appraisals_df_long$appraisals_category) <- contr.sum
+
+#anova    
+    model2_0 <- lmer(intensity ~ appraisals_category + (1 | ParticipantNo),
+               data = appraisals_df_long)
+
+          anova(model2_0, type = "III")
+          effectsize::eta_squared(model2_0, partial = T)
+ 
+#post-hoc of the main effect of appraisals category
+          em_model2_0 <- emmeans::emmeans(model2_0, ~ appraisals_category) 
+        em_model2_0 %>% 
+            pairs(simple = c("appraisals_category"), combine = TRUE, adjust = "holm")
+
+    #effect sizes    
+        compare(appraisals_df$responsibility, appraisals_df$insecurity)
+        compare(appraisals_df$responsibility, appraisals_df$self_worth)
+        compare(appraisals_df$insecurity, appraisals_df$self_worth)
+
+
+#Is gender a moderator?        
+model2_1 <- lmer(intensity ~ appraisals_category * gender + (1 | ParticipantNo),
+               data = appraisals_df_long)
+
+          anova(model2_1, type = "III")
+          effectsize::eta_squared(model2_1, partial = T)
+
+        
+#exploring gender differences in appraisals 
+          t.test(responsibility ~ gender, data = appraisals_df)
+          lsr::cohensD(appraisals_df$responsibility ~ appraisals_df$gender)
+          
+          t.test(insecurity ~ gender, data = appraisals_df)
+          lsr::cohensD(appraisals_df$insecurity ~ appraisals_df$gender)
+          
+          t.test(self_worth ~ gender, data = appraisals_df)
+          lsr::cohensD(appraisals_df$self_worth ~ appraisals_df$gender)
+          
+```
+
+### Appraisals associated with different elicitors
+
+```{r}
+#outcome: responsibility
+
+    model_r <- lm(responsibility ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = appraisals_df)
+    summary(model_r)
+    lm.beta::lm.beta(model_r) #standardized betas
+    
+#outcome: insecurity
+
+    model_i <- lm(insecurity ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = appraisals_df)
+    summary(model_i)
+    lm.beta::lm.beta(model_i) #standardized betas
+
+#outcome: self_worth
+
+    model_sw <- lm(self_worth ~ harm_insult + third_pers_violation + namoos_violation,
+                  data = appraisals_df)
+    summary(model_sw)
+    lm.beta::lm.beta(model_sw) #standardized betas
+          
+```
+
+
+Adding gender to the models above (as a predictor)
+
+```{r}
+#to compare models with and without gender, they must be run on the same samples. So we rerun the above models with listwise deletion that includes gender.
+appraisals_df_NAremoved <- appraisals_df[complete.cases(appraisals_df[,c("gender",  "harm_insult", "third_pers_violation", "namoos_violation")]),] 
+
+#outcome: responsibility
+    model_r_NAremoved <- lm(responsibility ~ harm_insult + third_pers_violation + namoos_violation, data = appraisals_df_NAremoved)
+    model_r2 <- lm(responsibility ~ harm_insult + third_pers_violation + namoos_violation + gender, data = appraisals_df_NAremoved)
+    anova(model_r_NAremoved, model_r2)
+
+    summary(model_r_NAremoved)
+    summary(model_r2)
+#outcome: insecurity
+    model_i_NAremoved <- lm(insecurity ~ harm_insult + third_pers_violation + namoos_violation, data = appraisals_df_NAremoved)
+    model_i2 <- lm(insecurity ~ harm_insult + third_pers_violation + namoos_violation + gender, data = appraisals_df_NAremoved)
+    anova(model_i_NAremoved, model_i2)    
+
+#outcome: self_worth
+    model_sw_NAremoved <- lm(self_worth ~ harm_insult + third_pers_violation + namoos_violation, data = appraisals_df_NAremoved)
+    model_sw2 <- lm(self_worth ~ harm_insult + third_pers_violation + namoos_violation + gender, data = appraisals_df_NAremoved)
+    anova(model_sw_NAremoved, model_sw2)
+``` 
+
+
+
