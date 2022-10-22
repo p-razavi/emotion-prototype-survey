@@ -34,7 +34,7 @@ df <- read.spss("Data_Study2and3.sav", use.value.labels = FALSE, to.data.frame =
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 ```
 
-# functions
+# Functions
 
 To calculate Cohen's d(z) for within-subjects
 ```{r}
